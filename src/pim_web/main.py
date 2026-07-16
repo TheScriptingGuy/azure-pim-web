@@ -11,13 +11,12 @@ from pathlib import Path
 from typing import Any
 
 import uvicorn
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
-
 from azure_pim_cli.chrome_launcher import DEFAULT_COPY_PROFILE, DEFAULT_PORT, launch_debug_chrome
 from azure_pim_cli.graph_client import GraphClient, TokenExpired
 from azure_pim_cli.token_grabber import DEFAULT_CHANNEL, grab_token
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from . import service
 from .models import (

@@ -1,0 +1,909 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Azure PIM</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: "Segoe UI", system-ui, sans-serif;
+    font-size: 14px;
+    background: #f3f4f6;
+    color: #111827;
+    min-height: 100vh;
+  }
+
+  /* Token bar */
+  #token-bar {
+    background: #1e3a5f;
+    color: #fff;
+    padding: 10px 20px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  #token-bar h1 { font-size: 16px; font-weight: 600; margin-right: 8px; }
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 10px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .badge.valid   { background: #16a34a; color: #fff; }
+  .badge.invalid { background: #dc2626; color: #fff; }
+  .badge.unknown { background: #6b7280; color: #fff; }
+  #token-expiry { font-size: 12px; opacity: .8; }
+  #token-upn    { font-size: 12px; opacity: .7; }
+  .spacer { flex: 1; }
+  button {
+    cursor: pointer;
+    border: none;
+    border-radius: 6px;
+    padding: 6px 14px;
+    font-size: 13px;
+    font-weight: 500;
+    transition: opacity .15s;
+  }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  button:not(:disabled):hover { opacity: .85; }
+  .btn-primary { background: #2563eb; color: #fff; }
+  .btn-secondary { background: #374151; color: #fff; }
+  .btn-success  { background: #16a34a; color: #fff; }
+  .btn-danger   { background: #dc2626; color: #fff; }
+  .btn-sm { padding: 4px 10px; font-size: 12px; }
+  #paste-toggle { background: #4b5563; color: #fff; }
+  #paste-section {
+    display: none;
+    width: 100%;
+    margin-top: 6px;
+    display: none;
+    gap: 8px;
+    align-items: center;
+  }
+  #paste-section.open { display: flex; }
+  #paste-input {
+    flex: 1;
+    padding: 5px 8px;
+    border-radius: 5px;
+    border: none;
+    font-size: 12px;
+    min-width: 200px;
+  }
+
+  /* Tabs */
+  nav.tabs {
+    background: #fff;
+    border-bottom: 2px solid #e5e7eb;
+    padding: 0 20px;
+    display: flex;
+    gap: 4px;
+  }
+  nav.tabs button {
+    background: none;
+    border-radius: 0;
+    border-bottom: 3px solid transparent;
+    padding: 12px 18px;
+    color: #6b7280;
+    font-weight: 500;
+    font-size: 14px;
+  }
+  nav.tabs button.active {
+    color: #2563eb;
+    border-bottom-color: #2563eb;
+  }
+  nav.tabs button:not(:disabled):hover { opacity: 1; color: #2563eb; }
+
+  /* Content */
+  main { padding: 24px 20px; max-width: 1200px; }
+
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+
+  /* Table */
+  .pim-table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  .pim-table th { background: #f9fafb; text-align: left; padding: 10px 12px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: #6b7280; border-bottom: 1px solid #e5e7eb; }
+  .pim-table td { padding: 10px 12px; border-bottom: 1px solid #f3f4f6; vertical-align: top; }
+  .pim-table tr:last-child td { border-bottom: none; }
+  .pim-table tr.selected { background: #eff6ff; }
+  .pim-table tr:not(.expand-row):hover { background: #f9fafb; }
+  .pim-table tr.selected:hover { background: #dbeafe; }
+
+  /* Sortable headers */
+  .pim-table th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+  .pim-table th.sortable:hover { background: #f3f4f6; color: #374151; }
+  .sort-icon { margin-left: 4px; font-size: 10px; opacity: .4; }
+  th.sort-asc  .sort-icon { opacity: 1; }
+  th.sort-asc  .sort-icon::after { content: '▲'; }
+  th.sort-desc .sort-icon::after { content: '▼'; }
+  th:not(.sort-asc):not(.sort-desc) .sort-icon::after { content: '⇅'; }
+
+  /* Expand row */
+  .expand-row td { padding: 0; }
+  .expand-inner {
+    padding: 10px 12px 14px 44px;
+    background: #f8faff;
+    border-top: 1px solid #dbeafe;
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    align-items: flex-end;
+  }
+  .field-group { display: flex; flex-direction: column; gap: 3px; }
+  .field-group label { font-size: 11px; font-weight: 600; color: #6b7280; text-transform: uppercase; }
+  .field-group input,
+  .field-group select {
+    padding: 5px 8px;
+    border: 1px solid #d1d5db;
+    border-radius: 5px;
+    font-size: 13px;
+    background: #fff;
+    min-width: 140px;
+  }
+  .field-group input:focus,
+  .field-group select:focus { outline: 2px solid #2563eb; border-color: transparent; }
+
+  /* Badges / pills */
+  .pill {
+    display: inline-block;
+    padding: 2px 7px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .pill.new      { background: #fef3c7; color: #92400e; }
+  .pill.mfa      { background: #fce7f3; color: #9d174d; }
+  .pill.ticket   { background: #ede9fe; color: #5b21b6; }
+  .pill.member   { background: #dcfce7; color: #166534; }
+  .pill.owner    { background: #dbeafe; color: #1e40af; }
+  .pill.env-prd  { background: #dcfce7; color: #166534; }
+  .pill.env-acc  { background: #fef9c3; color: #854d0e; }
+  .pill.env-tst  { background: #dbeafe; color: #1e40af; }
+  .pill.env-dev  { background: #f3f4f6; color: #374151; }
+
+  /* Status badge */
+  .status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .status-badge.provisioned   { background: #dcfce7; color: #166534; }
+  .status-badge.pending       { background: #fef9c3; color: #854d0e; }
+  .status-badge.failed        { background: #fee2e2; color: #991b1b; }
+  .status-badge.approved      { background: #dcfce7; color: #166534; }
+  .status-badge.activating    { background: #e0f2fe; color: #075985; }
+
+  /* Toolbar */
+  .toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 14px;
+    flex-wrap: wrap;
+  }
+  .toolbar h2 { font-size: 16px; font-weight: 600; }
+  .count-badge {
+    background: #e5e7eb;
+    color: #374151;
+    border-radius: 10px;
+    padding: 1px 8px;
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  /* Search filter */
+  .filter-input {
+    padding: 4px 10px;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    font-size: 13px;
+    min-width: 180px;
+    background: #fff;
+  }
+  .filter-input:focus { outline: 2px solid #2563eb; border-color: transparent; }
+
+  /* Approver justification */
+  #approver-just-wrap {
+    margin-bottom: 14px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  #approver-just-wrap label { font-size: 13px; font-weight: 500; }
+  #approver-just {
+    flex: 1;
+    min-width: 240px;
+    padding: 6px 10px;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    font-size: 13px;
+  }
+
+  /* Log */
+  #log {
+    margin-top: 18px;
+    background: #fff;
+    border-radius: 8px;
+    box-shadow: 0 1px 3px rgba(0,0,0,.08);
+    overflow: hidden;
+  }
+  #log-header {
+    background: #f9fafb;
+    padding: 8px 14px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #6b7280;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    border-bottom: 1px solid #e5e7eb;
+  }
+  #log-entries { padding: 8px 14px; min-height: 36px; }
+  .log-entry { padding: 4px 0; font-size: 13px; border-bottom: 1px solid #f3f4f6; display: flex; gap: 8px; align-items: baseline; }
+  .log-entry:last-child { border-bottom: none; }
+  .log-entry .log-name { font-weight: 500; }
+
+  /* Spinner */
+  .spinner {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border: 2px solid rgba(255,255,255,.4);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: spin .6s linear infinite;
+    vertical-align: middle;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .empty-msg { color: #9ca3af; font-style: italic; padding: 20px 0; text-align: center; }
+</style>
+</head>
+<body>
+
+<!-- Token bar -->
+<div id="token-bar">
+  <h1>Azure PIM</h1>
+  <span id="token-badge" class="badge unknown">● Unknown</span>
+  <span id="token-expiry"></span>
+  <span id="token-upn"></span>
+  <div class="spacer"></div>
+  <button id="btn-grab" class="btn-primary btn-sm" onclick="grabToken()">Get Token</button>
+  <button id="paste-toggle" class="btn-sm" onclick="togglePaste()">Paste ▼</button>
+  <div id="paste-section">
+    <input id="paste-input" type="password" placeholder="Paste bearer token…" />
+    <button class="btn-secondary btn-sm" onclick="pasteToken()">Set</button>
+  </div>
+</div>
+
+<!-- Tabs -->
+<nav class="tabs">
+  <button id="tab-elig" class="active" onclick="switchTab('elig')">Eligible Roles</button>
+  <button id="tab-approvals" onclick="switchTab('approvals')">Pending Approvals</button>
+</nav>
+
+<main>
+
+  <!-- Eligible Roles panel -->
+  <div id="panel-elig" class="tab-panel active">
+    <div class="toolbar">
+      <h2>Eligible Roles</h2>
+      <span id="elig-count" class="count-badge">0</span>
+      <div class="spacer"></div>
+      <input id="elig-filter" type="search" class="filter-input" placeholder="Filter roles…"
+             oninput="eligFilter=this.value;renderElig()" />
+      <button class="btn-secondary btn-sm" onclick="loadEligibilities()">↻ Refresh</button>
+      <button id="btn-activate" class="btn-success" disabled onclick="activateSelected()">
+        Activate selected (<span id="sel-elig-count">0</span>)
+      </button>
+    </div>
+    <table class="pim-table" id="elig-table">
+      <thead>
+        <tr>
+          <th style="width:36px"></th>
+          <th class="sortable" data-col="displayName" onclick="sortElig('displayName')">Group <span class="sort-icon"></span></th>
+          <th class="sortable" data-col="accessId" onclick="sortElig('accessId')">Role <span class="sort-icon"></span></th>
+          <th class="sortable" data-col="policyMaxDurationHours" onclick="sortElig('policyMaxDurationHours')">Max duration <span class="sort-icon"></span></th>
+          <th class="sortable" data-col="endDateTime" onclick="sortElig('endDateTime')">Eligibility expires <span class="sort-icon"></span></th>
+          <th>Flags</th>
+          <th class="sortable" data-col="_env" onclick="sortElig('_env')">Env <span class="sort-icon"></span></th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody id="elig-body">
+        <tr><td colspan="8" class="empty-msg">Load eligibilities to begin.</td></tr>
+      </tbody>
+    </table>
+    <div id="log" style="display:none">
+      <div id="log-header">Activation log</div>
+      <div id="log-entries"></div>
+    </div>
+  </div>
+
+  <!-- Pending Approvals panel -->
+  <div id="panel-approvals" class="tab-panel">
+    <div class="toolbar">
+      <h2>Pending Approvals</h2>
+      <span id="approvals-count" class="count-badge">0</span>
+      <div class="spacer"></div>
+      <button class="btn-secondary btn-sm" onclick="loadApprovals()">↻ Refresh</button>
+      <button id="btn-approve" class="btn-success" disabled onclick="approveSelected()">
+        Approve selected (<span id="sel-approvals-count">0</span>)
+      </button>
+    </div>
+    <div id="approver-just-wrap">
+      <label for="approver-just">Approver justification:</label>
+      <input id="approver-just" type="text" placeholder="Required for all selected approvals…" />
+    </div>
+    <table class="pim-table" id="approvals-table">
+      <thead>
+        <tr>
+          <th style="width:36px"></th>
+          <th>Group</th>
+          <th>Role</th>
+          <th>Requester</th>
+          <th>Justification</th>
+          <th>Duration</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody id="approvals-body">
+        <tr><td colspan="7" class="empty-msg">Load approvals to begin.</td></tr>
+      </tbody>
+    </table>
+    <div id="approve-log" style="display:none">
+      <div id="log-header">Approval log</div>
+      <div id="approve-log-entries"></div>
+    </div>
+  </div>
+
+</main>
+
+<script>
+// ── State ─────────────────────────────────────────────────────────────────────
+let eligData = [];
+let eligMap = new Map();   // key → EligibilityItem
+let approvalData = [];
+let eligSel = new Set();   // stable keys: `${groupId}_${accessId}`
+let approvalSel = new Set();
+let eligSort = { col: 'displayName', dir: 'asc' };
+let eligFilter = '';
+
+// Stable, DOM-safe key for an eligibility item
+const eligKey = e => `${e.groupId}_${e.accessId}`;
+
+// ── Environment derivation ────────────────────────────────────────────────────
+const ENV_PATTERNS = [
+  { env: 'prd', re: /(^|[-_ ])(prd|prod|production)([-_ ]|$)/i },
+  { env: 'acc', re: /(^|[-_ ])(acc|acceptance|uat|stg|staging|preprod|pre-prod)([-_ ]|$)/i },
+  { env: 'tst', re: /(^|[-_ ])(tst|test|qa)([-_ ]|$)/i },
+  { env: 'dev', re: /(^|[-_ ])(dev|development|sandbox|sbx|ota|otp)([-_ ]|$)/i },
+];
+
+function deriveEnv(e) {
+  const hay = `${e.displayName || ''} ${e.description || ''}`;
+  for (const p of ENV_PATTERNS) if (p.re.test(hay)) return p.env;
+  return '';
+}
+
+// ── Sort / filter helpers ─────────────────────────────────────────────────────
+function matchesEligFilter(e) {
+  if (!eligFilter) return true;
+  const q = eligFilter.toLowerCase();
+  return (e.displayName || '').toLowerCase().includes(q)
+    || (e.description || '').toLowerCase().includes(q)
+    || (e._env || '').toLowerCase().includes(q);
+}
+
+function sortElig(col) {
+  if (eligSort.col === col) eligSort.dir = eligSort.dir === 'asc' ? 'desc' : 'asc';
+  else eligSort = { col, dir: 'asc' };
+  updateSortHeaders();
+  renderElig();
+}
+
+function updateSortHeaders() {
+  document.querySelectorAll('#elig-table thead th[data-col]').forEach(th => {
+    th.classList.remove('sort-asc', 'sort-desc');
+    if (th.dataset.col === eligSort.col) th.classList.add(`sort-${eligSort.dir}`);
+  });
+}
+
+function cmpVal(a, b, col) {
+  let av = a[col], bv = b[col];
+  if (col === 'endDateTime') {
+    const toMs = v => (!v || v === 'Permanent') ? Infinity : new Date(v).getTime();
+    av = toMs(av); bv = toMs(bv);
+    return av - bv;
+  }
+  if (typeof av === 'number') return (av ?? 0) - (bv ?? 0);
+  return String(av ?? '').localeCompare(String(bv ?? ''));
+}
+
+function cmp(a, b) {
+  const r = cmpVal(a, b, eligSort.col);
+  return eligSort.dir === 'asc' ? r : -r;
+}
+
+// ── Token ─────────────────────────────────────────────────────────────────────
+async function checkTokenStatus() {
+  try {
+    const r = await fetch('/api/token/status');
+    const d = await r.json();
+    applyTokenStatus(d);
+  } catch {
+    setBadge('unknown', '● Unknown');
+  }
+}
+
+function applyTokenStatus(d) {
+  if (d.valid) {
+    setBadge('valid', '● Valid');
+    document.getElementById('token-expiry').textContent = d.expiry ? `expires ${d.expiry}` : '';
+    document.getElementById('token-upn').textContent = d.upn || '';
+  } else {
+    setBadge('invalid', '● No token');
+    document.getElementById('token-expiry').textContent = '';
+    document.getElementById('token-upn').textContent = '';
+  }
+}
+
+function setBadge(cls, text) {
+  const b = document.getElementById('token-badge');
+  b.className = `badge ${cls}`;
+  b.textContent = text;
+}
+
+async function grabToken() {
+  const btn = document.getElementById('btn-grab');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Grabbing…';
+  setBadge('unknown', '● Connecting…');
+  try {
+    const r = await fetch('/api/token/grab', { method: 'POST' });
+    const d = await r.json();
+    if (r.ok) {
+      applyTokenStatus({ valid: true, expiry: d.expiry, upn: d.upn });
+    } else {
+      setBadge('invalid', '● Failed');
+      alert('Token grab failed: ' + (d.detail || 'unknown error'));
+    }
+  } catch (e) {
+    setBadge('invalid', '● Error');
+    alert('Token grab error: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Get Token';
+  }
+}
+
+function togglePaste() {
+  const s = document.getElementById('paste-section');
+  s.classList.toggle('open');
+  if (s.classList.contains('open')) document.getElementById('paste-input').focus();
+}
+
+async function pasteToken() {
+  const val = document.getElementById('paste-input').value.trim();
+  if (!val) return;
+  try {
+    const r = await fetch('/api/token/set', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: val }),
+    });
+    const d = await r.json();
+    if (r.ok) {
+      applyTokenStatus({ valid: true, expiry: d.expiry, upn: d.upn });
+      document.getElementById('paste-input').value = '';
+      document.getElementById('paste-section').classList.remove('open');
+    } else {
+      alert('Set token failed: ' + (d.detail || 'unknown'));
+    }
+  } catch (e) {
+    alert('Error: ' + e.message);
+  }
+}
+
+// ── Tabs ──────────────────────────────────────────────────────────────────────
+function switchTab(name) {
+  ['elig', 'approvals'].forEach(t => {
+    document.getElementById(`tab-${t}`).classList.toggle('active', t === name);
+    document.getElementById(`panel-${t}`).classList.toggle('active', t === name);
+  });
+}
+
+// ── Eligible Roles ────────────────────────────────────────────────────────────
+async function loadEligibilities() {
+  const tbody = document.getElementById('elig-body');
+  tbody.innerHTML = '<tr><td colspan="8" class="empty-msg">Loading…</td></tr>';
+  eligSel.clear();
+  updateActivateBtn();
+
+  try {
+    const r = await fetch('/api/eligibilities');
+    if (r.status === 401) {
+      tbody.innerHTML = '<tr><td colspan="8" class="empty-msg">Token missing or expired — grab a new token first.</td></tr>';
+      setBadge('invalid', '● No token');
+      return;
+    }
+    eligData = await r.json();
+    eligData.forEach(e => { e._env = deriveEnv(e); });
+    eligMap = new Map(eligData.map(e => [eligKey(e), e]));
+    document.getElementById('elig-count').textContent = eligData.length;
+    updateSortHeaders();
+    renderElig();
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="8" class="empty-msg">Error: ${esc(e.message)}</td></tr>`;
+  }
+}
+
+function renderElig() {
+  const tbody = document.getElementById('elig-body');
+  const rows = eligData.filter(matchesEligFilter).sort(cmp);
+  const total = eligData.length;
+  const filtered = rows.length;
+  document.getElementById('elig-count').textContent =
+    eligFilter ? `${filtered} / ${total}` : total;
+
+  if (!rows.length) {
+    tbody.innerHTML = `<tr><td colspan="8" class="empty-msg">${eligFilter ? 'No matches.' : 'No eligible roles found.'}</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = '';
+  rows.forEach(e => {
+    const kid = eligKey(e);
+    const isSelected = eligSel.has(kid);
+
+    const flags = [];
+    if (e.isNew)              flags.push('<span class="pill new">NEW</span>');
+    if (e.requiresMfa)        flags.push('<span class="pill mfa">MFA</span>');
+    if (e.requiresTicket)     flags.push('<span class="pill ticket">Ticket</span>');
+
+    const rolePill = e.accessId === 'owner'
+      ? '<span class="pill owner">Owner</span>'
+      : '<span class="pill member">Member</span>';
+
+    const expiry = e.endDateTime && e.endDateTime !== 'Permanent'
+      ? fmtDate(e.endDateTime) : 'Permanent';
+
+    const envPill = e._env
+      ? `<span class="pill env-${e._env}">${e._env.toUpperCase()}</span>`
+      : '—';
+
+    const tr = document.createElement('tr');
+    tr.id = `elig-row-${kid}`;
+    tr.style.cursor = 'pointer';
+    if (isSelected) tr.classList.add('selected');
+    tr.innerHTML = `
+      <td><input type="checkbox" id="elig-cb-${kid}" ${isSelected ? 'checked' : ''} onchange="toggleEligSel('${kid}')" /></td>
+      <td><strong>${esc(e.displayName)}</strong>${e.description ? `<br><small style="color:#6b7280">${esc(e.description)}</small>` : ''}</td>
+      <td>${rolePill}</td>
+      <td>${e.policyMaxDurationHours}h</td>
+      <td>${expiry}</td>
+      <td>${flags.join(' ') || '—'}</td>
+      <td>${envPill}</td>
+      <td id="elig-status-${kid}"></td>
+    `;
+    tr.addEventListener('click', ev => {
+      if (ev.target.closest('input,button,select,a,label')) return;
+      const cb = document.getElementById(`elig-cb-${kid}`);
+      cb.checked = !cb.checked;
+      toggleEligSel(kid);
+    });
+    tbody.appendChild(tr);
+
+    // Expand row (hidden until selected)
+    const exTr = document.createElement('tr');
+    exTr.className = 'expand-row';
+    exTr.id = `elig-expand-${kid}`;
+    exTr.style.display = isSelected ? '' : 'none';
+
+    let expandHtml = '<td colspan="8"><div class="expand-inner">';
+    expandHtml += `
+      <div class="field-group">
+        <label>Duration (hours)</label>
+        <select id="elig-dur-${kid}">
+          ${durationOptions(e.policyMaxDurationHours, e.policyMaxDurationHours)}
+        </select>
+      </div>`;
+    if (e.requiresJustification) {
+      expandHtml += `
+        <div class="field-group" style="flex:1;min-width:200px">
+          <label>Justification <span style="color:#dc2626">*</span></label>
+          <input type="text" id="elig-just-${kid}" placeholder="Required…" />
+        </div>`;
+    }
+    if (e.requiresTicket) {
+      expandHtml += `
+        <div class="field-group">
+          <label>Ticket number <span style="color:#dc2626">*</span></label>
+          <input type="text" id="elig-ticket-${kid}" placeholder="e.g. INC-1234" />
+        </div>`;
+    }
+    expandHtml += '</div></td>';
+    exTr.innerHTML = expandHtml;
+    tbody.appendChild(exTr);
+  });
+}
+
+function durationOptions(max, selected) {
+  let html = '';
+  for (let h = 1; h <= max; h++)
+    html += `<option value="${h}"${h === selected ? ' selected' : ''}>${h}h</option>`;
+  return html;
+}
+
+function toggleEligSel(kid) {
+  const cb = document.getElementById(`elig-cb-${kid}`);
+  const exRow = document.getElementById(`elig-expand-${kid}`);
+  const row = document.getElementById(`elig-row-${kid}`);
+  if (cb.checked) {
+    eligSel.add(kid);
+    exRow.style.display = '';
+    row.classList.add('selected');
+  } else {
+    eligSel.delete(kid);
+    exRow.style.display = 'none';
+    row.classList.remove('selected');
+  }
+  updateActivateBtn();
+}
+
+function updateActivateBtn() {
+  const btn = document.getElementById('btn-activate');
+  const n = eligSel.size;
+  btn.disabled = n === 0;
+  document.getElementById('sel-elig-count').textContent = n;
+}
+
+async function activateSelected() {
+  const items = [];
+  for (const kid of eligSel) {
+    const e = eligMap.get(kid);
+    if (!e) continue;
+    const dur = parseInt(document.getElementById(`elig-dur-${kid}`)?.value || e.policyMaxDurationHours, 10);
+    const just = e.requiresJustification
+      ? (document.getElementById(`elig-just-${kid}`)?.value || '').trim()
+      : '';
+    const ticket = e.requiresTicket
+      ? (document.getElementById(`elig-ticket-${kid}`)?.value || '').trim()
+      : null;
+
+    if (e.requiresJustification && !just) {
+      alert(`Justification required for ${e.displayName}`);
+      document.getElementById(`elig-just-${kid}`)?.focus();
+      return;
+    }
+    if (e.requiresTicket && !ticket) {
+      alert(`Ticket number required for ${e.displayName}`);
+      document.getElementById(`elig-ticket-${kid}`)?.focus();
+      return;
+    }
+    items.push({
+      groupId: e.groupId,
+      accessId: e.accessId,
+      durationHours: dur,
+      justification: just || null,
+      ticketNumber: ticket || null,
+    });
+    setEligStatus(kid, 'activating', '⏳ Activating…');
+  }
+
+  const btn = document.getElementById('btn-activate');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Activating…';
+
+  showLog();
+
+  try {
+    const r = await fetch('/api/activate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items }),
+    });
+    const results = await r.json();
+    if (!r.ok) {
+      alert('Activation error: ' + (results.detail || JSON.stringify(results)));
+      return;
+    }
+
+    const keys = [...eligSel];
+    results.forEach((res, idx) => {
+      const kid = keys[idx];
+      const e = eligMap.get(kid);
+      if (e) renderStatus(kid, res, e.displayName);
+    });
+  } catch (e) {
+    addLogEntry('error', 'Network error', e.message);
+  } finally {
+    btn.disabled = eligSel.size === 0;
+    btn.innerHTML = `Activate selected (<span id="sel-elig-count">${eligSel.size}</span>)`;
+  }
+}
+
+function setEligStatus(kid, cls, html) {
+  const td = document.getElementById(`elig-status-${kid}`);
+  if (td) td.innerHTML = `<span class="status-badge ${cls}">${html}</span>`;
+}
+
+function renderStatus(kid, res, displayName) {
+  const s = res.status;
+  let cls = 'pending', icon = '⏳';
+  if (s === 'Provisioned')    { cls = 'provisioned'; icon = '✓'; }
+  else if (s === 'Failed' || s === 'Denied' || s === 'Canceled') { cls = 'failed'; icon = '✗'; }
+  else if (s === 'AwaitingApproval' || s.startsWith('Pending')) { cls = 'pending'; icon = '⏳'; }
+  else if (s === 'AlreadyActive') { cls = 'provisioned'; icon = '✓'; }
+
+  const detail = res.detail ? ` — ${res.detail}` : '';
+  setEligStatus(kid, cls, `${icon} ${s}${detail}`);
+  addLogEntry(cls, displayName, `${s}${detail}`);
+}
+
+function showLog() {
+  const el = document.getElementById('log');
+  el.style.display = '';
+}
+
+function addLogEntry(cls, name, detail) {
+  const el = document.getElementById('log-entries');
+  const div = document.createElement('div');
+  div.className = 'log-entry';
+  div.innerHTML = `<span class="status-badge ${cls}" style="min-width:80px">${cls === 'provisioned' || cls === 'approved' ? '✓' : cls === 'failed' ? '✗' : '⏳'} ${cls}</span> <span class="log-name">${esc(name)}</span> <span style="color:#6b7280">${esc(detail)}</span>`;
+  el.appendChild(div);
+}
+
+// ── Pending Approvals ─────────────────────────────────────────────────────────
+async function loadApprovals() {
+  const tbody = document.getElementById('approvals-body');
+  tbody.innerHTML = '<tr><td colspan="7" class="empty-msg">Loading…</td></tr>';
+  approvalSel.clear();
+  updateApproveBtn();
+
+  try {
+    const r = await fetch('/api/approvals');
+    if (r.status === 401) {
+      tbody.innerHTML = '<tr><td colspan="7" class="empty-msg">Token missing or expired.</td></tr>';
+      setBadge('invalid', '● No token');
+      return;
+    }
+    approvalData = await r.json();
+    document.getElementById('approvals-count').textContent = approvalData.length;
+    renderApprovals();
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="7" class="empty-msg">Error: ${esc(e.message)}</td></tr>`;
+  }
+}
+
+function renderApprovals() {
+  const tbody = document.getElementById('approvals-body');
+  if (!approvalData.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="empty-msg">No pending approvals.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = '';
+  approvalData.forEach((a, i) => {
+    const rolePill = a.accessId === 'owner'
+      ? '<span class="pill owner">Owner</span>'
+      : '<span class="pill member">Member</span>';
+
+    const tr = document.createElement('tr');
+    tr.id = `approval-row-${i}`;
+    tr.innerHTML = `
+      <td><input type="checkbox" id="approval-cb-${i}" onchange="toggleApprovalSel(${i})" /></td>
+      <td><strong>${esc(a.displayName)}</strong></td>
+      <td>${rolePill}</td>
+      <td>${esc(a.requester)}</td>
+      <td style="max-width:200px;word-break:break-word">${esc(a.justification || '—')}</td>
+      <td>${esc(a.duration || '—')}</td>
+      <td id="approval-status-${i}"></td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+function toggleApprovalSel(i) {
+  const cb = document.getElementById(`approval-cb-${i}`);
+  const row = document.getElementById(`approval-row-${i}`);
+  if (cb.checked) {
+    approvalSel.add(i);
+    row.classList.add('selected');
+  } else {
+    approvalSel.delete(i);
+    row.classList.remove('selected');
+  }
+  updateApproveBtn();
+}
+
+function updateApproveBtn() {
+  const btn = document.getElementById('btn-approve');
+  const n = approvalSel.size;
+  btn.disabled = n === 0;
+  document.getElementById('sel-approvals-count').textContent = n;
+}
+
+async function approveSelected() {
+  const justification = document.getElementById('approver-just').value.trim();
+  if (!justification) {
+    alert('Approver justification is required.');
+    document.getElementById('approver-just').focus();
+    return;
+  }
+
+  const items = [...approvalSel].map(i => ({
+    approvalId: approvalData[i].approvalId,
+    steps: [],
+    justification,
+  }));
+
+  const btn = document.getElementById('btn-approve');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Approving…';
+
+  const logEl = document.getElementById('approve-log');
+  const logEntries = document.getElementById('approve-log-entries');
+  logEl.style.display = '';
+
+  try {
+    const r = await fetch('/api/approve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items }),
+    });
+    const results = await r.json();
+    if (!r.ok) {
+      alert('Approval error: ' + (results.detail || JSON.stringify(results)));
+      return;
+    }
+
+    const indices = [...approvalSel];
+    results.forEach((res, idx) => {
+      const i = indices[idx];
+      const a = approvalData[i];
+      const cls = res.ok ? 'approved' : 'failed';
+      const icon = res.ok ? '✓' : '✗';
+      const statusTd = document.getElementById(`approval-status-${i}`);
+      if (statusTd) statusTd.innerHTML = `<span class="status-badge ${cls}">${icon} ${res.ok ? 'Approved' : 'Failed'}</span>`;
+
+      const entry = document.createElement('div');
+      entry.className = 'log-entry';
+      entry.innerHTML = `<span class="status-badge ${cls}" style="min-width:80px">${icon} ${cls}</span> <span class="log-name">${esc(a.displayName)}</span> <span style="color:#6b7280">${esc(res.detail || '')}</span>`;
+      logEntries.appendChild(entry);
+    });
+  } catch (e) {
+    const entry = document.createElement('div');
+    entry.className = 'log-entry';
+    entry.innerHTML = `<span class="status-badge failed">✗ error</span> <span>${esc(e.message)}</span>`;
+    logEntries.appendChild(entry);
+  } finally {
+    btn.disabled = approvalSel.size === 0;
+    btn.innerHTML = `Approve selected (<span id="sel-approvals-count">${approvalSel.size}</span>)`;
+  }
+}
+
+// ── Utilities ─────────────────────────────────────────────────────────────────
+function esc(str) {
+  return String(str ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function fmtDate(iso) {
+  try {
+    return new Date(iso).toLocaleDateString(undefined, { year:'numeric', month:'short', day:'numeric' });
+  } catch { return iso; }
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+checkTokenStatus();
+updateSortHeaders();
+</script>
+</body>
+</html>

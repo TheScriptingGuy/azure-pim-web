@@ -58,7 +58,7 @@ def _decode_jwt_payload(token: str) -> dict:
 
 def _token_valid() -> bool:
     exp = _state.get("token_exp")
-    return bool(_state.get("token")) and bool(exp) and datetime.now(UTC).timestamp() < exp
+    return bool(_state.get("token")) and isinstance(exp, float) and datetime.now(UTC).timestamp() < exp
 
 
 def _require_client() -> GraphClient:

@@ -16,9 +16,9 @@ from azure_pim_cli.cli import (
 from azure_pim_cli.graph_client import GraphClient
 
 from .models import (
-    ActiveGroupItem,
     ActivatePayload,
     ActivateResult,
+    ActiveGroupItem,
     ApprovalItem,
     ApprovePayload,
     ApproveResult,

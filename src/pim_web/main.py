@@ -20,9 +20,9 @@ from fastapi.staticfiles import StaticFiles
 
 from . import service
 from .models import (
-    ActiveGroupItem,
     ActivateRequest,
     ActivateResult,
+    ActiveGroupItem,
     ApprovalItem,
     ApproveRequest,
     ApproveResult,

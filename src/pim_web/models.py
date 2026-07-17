@@ -63,6 +63,15 @@ class ApproveResult(BaseModel):
     detail: str = ""
 
 
+class ActiveGroupItem(BaseModel):
+    groupId: str
+    displayName: str
+    description: str | None = None
+    accessId: str
+    endDateTime: str | None = None
+    status: str
+
+
 class TokenSetRequest(BaseModel):
     token: str
 

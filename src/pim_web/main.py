@@ -20,6 +20,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import service
 from .models import (
+    ActiveGroupItem,
     ActivateRequest,
     ActivateResult,
     ApprovalItem,
@@ -146,6 +147,18 @@ async def approvals() -> list[ApprovalItem]:
     gc = _require_client()
     try:
         return await service.get_approvals(gc)
+    except TokenExpired:
+        _state["token"] = None
+        raise HTTPException(status_code=401, detail="Token expired.")
+    finally:
+        await gc.aclose()
+
+
+@app.get("/api/active", response_model=list[ActiveGroupItem])
+async def active_groups() -> list[ActiveGroupItem]:
+    gc = _require_client()
+    try:
+        return await service.get_active_assignments(gc)
     except TokenExpired:
         _state["token"] = None
         raise HTTPException(status_code=401, detail="Token expired.")

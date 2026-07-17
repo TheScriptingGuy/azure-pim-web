@@ -292,6 +292,7 @@
 <nav class="tabs">
   <button id="tab-elig" class="active" onclick="switchTab('elig')">Eligible Roles</button>
   <button id="tab-approvals" onclick="switchTab('approvals')">Pending Approvals</button>
+  <button id="tab-active" onclick="switchTab('active')">Active Groups</button>
 </nav>
 
 <main>
@@ -342,6 +343,8 @@
       <h2>Pending Approvals</h2>
       <span id="approvals-count" class="count-badge">0</span>
       <div class="spacer"></div>
+      <input id="approvals-filter" type="search" class="filter-input" placeholder="Filter approvals…"
+             oninput="approvalFilter=this.value;renderApprovals()" />
       <button class="btn-secondary btn-sm" onclick="loadApprovals()">↻ Refresh</button>
       <button id="btn-approve" class="btn-success" disabled onclick="approveSelected()">
         Approve selected (<span id="sel-approvals-count">0</span>)
@@ -355,11 +358,11 @@
       <thead>
         <tr>
           <th style="width:36px"></th>
-          <th>Group</th>
-          <th>Role</th>
-          <th>Requester</th>
+          <th class="sortable" data-col="displayName" onclick="sortApprovals('displayName')">Group <span class="sort-icon"></span></th>
+          <th class="sortable" data-col="accessId" onclick="sortApprovals('accessId')">Role <span class="sort-icon"></span></th>
+          <th class="sortable" data-col="requester" onclick="sortApprovals('requester')">Requester <span class="sort-icon"></span></th>
           <th>Justification</th>
-          <th>Duration</th>
+          <th class="sortable" data-col="duration" onclick="sortApprovals('duration')">Duration <span class="sort-icon"></span></th>
           <th>Status</th>
         </tr>
       </thead>
@@ -373,6 +376,32 @@
     </div>
   </div>
 
+  <!-- Active Groups panel -->
+  <div id="panel-active" class="tab-panel">
+    <div class="toolbar">
+      <h2>Active Groups</h2>
+      <span id="active-count" class="count-badge">0</span>
+      <div class="spacer"></div>
+      <input id="active-filter" type="search" class="filter-input" placeholder="Filter active groups…"
+             oninput="activeFilter=this.value;renderActiveGroups()" />
+      <button class="btn-secondary btn-sm" onclick="loadActiveGroups()">↻ Refresh</button>
+    </div>
+    <table class="pim-table" id="active-table">
+      <thead>
+        <tr>
+          <th class="sortable" data-col="displayName" onclick="sortActive('displayName')">Group <span class="sort-icon"></span></th>
+          <th class="sortable" data-col="accessId" onclick="sortActive('accessId')">Role <span class="sort-icon"></span></th>
+          <th class="sortable" data-col="_env" onclick="sortActive('_env')">Env <span class="sort-icon"></span></th>
+          <th class="sortable" data-col="endDateTime" onclick="sortActive('endDateTime')">Expires <span class="sort-icon"></span></th>
+          <th class="sortable" data-col="status" onclick="sortActive('status')">Status <span class="sort-icon"></span></th>
+        </tr>
+      </thead>
+      <tbody id="active-body">
+        <tr><td colspan="5" class="empty-msg">Load active groups to begin.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
 </main>
 
 <script>
@@ -380,10 +409,15 @@
 let eligData = [];
 let eligMap = new Map();   // key → EligibilityItem
 let approvalData = [];
+let activeData = [];
 let eligSel = new Set();   // stable keys: `${groupId}_${accessId}`
 let approvalSel = new Set();
 let eligSort = { col: 'displayName', dir: 'asc' };
+let approvalSort = { col: 'displayName', dir: 'asc' };
+let activeSort = { col: 'displayName', dir: 'asc' };
 let eligFilter = '';
+let approvalFilter = '';
+let activeFilter = '';
 
 // Stable, DOM-safe key for an eligibility item
 const eligKey = e => `${e.groupId}_${e.accessId}`;
@@ -439,6 +473,67 @@ function cmpVal(a, b, col) {
 function cmp(a, b) {
   const r = cmpVal(a, b, eligSort.col);
   return eligSort.dir === 'asc' ? r : -r;
+}
+
+function matchesApprovalFilter(a) {
+  if (!approvalFilter) return true;
+  const q = approvalFilter.toLowerCase();
+  return (a.displayName || '').toLowerCase().includes(q)
+    || (a.accessId || '').toLowerCase().includes(q)
+    || (a.requester || '').toLowerCase().includes(q)
+    || (a.justification || '').toLowerCase().includes(q);
+}
+
+function sortApprovals(col) {
+  if (approvalSort.col === col) approvalSort.dir = approvalSort.dir === 'asc' ? 'desc' : 'asc';
+  else approvalSort = { col, dir: 'asc' };
+  updateApprovalSortHeaders();
+  renderApprovals();
+}
+
+function updateApprovalSortHeaders() {
+  document.querySelectorAll('#approvals-table thead th[data-col]').forEach(th => {
+    th.classList.remove('sort-asc', 'sort-desc');
+    if (th.dataset.col === approvalSort.col) th.classList.add(`sort-${approvalSort.dir}`);
+  });
+}
+
+function cmpApproval(a, b) {
+  const r = String(a[approvalSort.col] ?? '').localeCompare(String(b[approvalSort.col] ?? ''));
+  return approvalSort.dir === 'asc' ? r : -r;
+}
+
+function matchesActiveFilter(a) {
+  if (!activeFilter) return true;
+  const q = activeFilter.toLowerCase();
+  return (a.displayName || '').toLowerCase().includes(q)
+    || (a._env || '').toLowerCase().includes(q);
+}
+
+function sortActive(col) {
+  if (activeSort.col === col) activeSort.dir = activeSort.dir === 'asc' ? 'desc' : 'asc';
+  else activeSort = { col, dir: 'asc' };
+  updateActiveSortHeaders();
+  renderActiveGroups();
+}
+
+function updateActiveSortHeaders() {
+  document.querySelectorAll('#active-table thead th[data-col]').forEach(th => {
+    th.classList.remove('sort-asc', 'sort-desc');
+    if (th.dataset.col === activeSort.col) th.classList.add(`sort-${activeSort.dir}`);
+  });
+}
+
+function cmpActive(a, b) {
+  let av = a[activeSort.col], bv = b[activeSort.col];
+  if (activeSort.col === 'endDateTime') {
+    const toMs = v => (!v) ? Infinity : new Date(v).getTime();
+    av = toMs(av); bv = toMs(bv);
+    const r = av - bv;
+    return activeSort.dir === 'asc' ? r : -r;
+  }
+  const r = String(av ?? '').localeCompare(String(bv ?? ''));
+  return activeSort.dir === 'asc' ? r : -r;
 }
 
 // ── Token ─────────────────────────────────────────────────────────────────────
@@ -523,7 +618,7 @@ async function pasteToken() {
 
 // ── Tabs ──────────────────────────────────────────────────────────────────────
 function switchTab(name) {
-  ['elig', 'approvals'].forEach(t => {
+  ['elig', 'approvals', 'active'].forEach(t => {
     document.getElementById(`tab-${t}`).classList.toggle('active', t === name);
     document.getElementById(`panel-${t}`).classList.toggle('active', t === name);
   });
@@ -776,7 +871,7 @@ async function loadApprovals() {
       return;
     }
     approvalData = await r.json();
-    document.getElementById('approvals-count').textContent = approvalData.length;
+    updateApprovalSortHeaders();
     renderApprovals();
   } catch (e) {
     tbody.innerHTML = `<tr><td colspan="7" class="empty-msg">Error: ${esc(e.message)}</td></tr>`;
@@ -785,20 +880,27 @@ async function loadApprovals() {
 
 function renderApprovals() {
   const tbody = document.getElementById('approvals-body');
-  if (!approvalData.length) {
-    tbody.innerHTML = '<tr><td colspan="7" class="empty-msg">No pending approvals.</td></tr>';
+  const rows = approvalData.filter(matchesApprovalFilter).sort(cmpApproval);
+  const total = approvalData.length;
+  document.getElementById('approvals-count').textContent =
+    approvalFilter ? `${rows.length} / ${total}` : total;
+
+  if (!rows.length) {
+    tbody.innerHTML = `<tr><td colspan="7" class="empty-msg">${approvalFilter ? 'No matches.' : 'No pending approvals.'}</td></tr>`;
     return;
   }
   tbody.innerHTML = '';
-  approvalData.forEach((a, i) => {
+  rows.forEach(a => {
+    const i = approvalData.indexOf(a);
     const rolePill = a.accessId === 'owner'
       ? '<span class="pill owner">Owner</span>'
       : '<span class="pill member">Member</span>';
 
     const tr = document.createElement('tr');
     tr.id = `approval-row-${i}`;
+    if (approvalSel.has(i)) tr.classList.add('selected');
     tr.innerHTML = `
-      <td><input type="checkbox" id="approval-cb-${i}" onchange="toggleApprovalSel(${i})" /></td>
+      <td><input type="checkbox" id="approval-cb-${i}" ${approvalSel.has(i) ? 'checked' : ''} onchange="toggleApprovalSel(${i})" /></td>
       <td><strong>${esc(a.displayName)}</strong></td>
       <td>${rolePill}</td>
       <td>${esc(a.requester)}</td>
@@ -889,6 +991,61 @@ async function approveSelected() {
   }
 }
 
+// ── Active Groups ─────────────────────────────────────────────────────────────
+async function loadActiveGroups() {
+  const tbody = document.getElementById('active-body');
+  tbody.innerHTML = '<tr><td colspan="5" class="empty-msg">Loading…</td></tr>';
+  try {
+    const r = await fetch('/api/active');
+    if (r.status === 401) {
+      tbody.innerHTML = '<tr><td colspan="5" class="empty-msg">Token missing or expired — grab a new token first.</td></tr>';
+      setBadge('invalid', '● No token');
+      return;
+    }
+    activeData = await r.json();
+    activeData.forEach(e => { e._env = deriveEnv(e); });
+    updateActiveSortHeaders();
+    renderActiveGroups();
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="5" class="empty-msg">Error: ${esc(e.message)}</td></tr>`;
+  }
+}
+
+function renderActiveGroups() {
+  const tbody = document.getElementById('active-body');
+  const rows = activeData.filter(matchesActiveFilter).sort(cmpActive);
+  const total = activeData.length;
+  document.getElementById('active-count').textContent =
+    activeFilter ? `${rows.length} / ${total}` : total;
+
+  if (!rows.length) {
+    tbody.innerHTML = `<tr><td colspan="5" class="empty-msg">${activeFilter ? 'No matches.' : 'No active group assignments.'}</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = '';
+  rows.forEach(a => {
+    const rolePill = a.accessId === 'owner'
+      ? '<span class="pill owner">Owner</span>'
+      : '<span class="pill member">Member</span>';
+    const envPill = a._env
+      ? `<span class="pill env-${a._env}">${a._env.toUpperCase()}</span>`
+      : '—';
+    const expiry = a.endDateTime ? fmtDate(a.endDateTime) : 'Permanent';
+    const statusCls = a.status === 'Provisioned' ? 'provisioned' : 'pending';
+    const statusIcon = a.status === 'Provisioned' ? '✓' : '⏳';
+
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><strong>${esc(a.displayName)}</strong>${a.description ? `<br><small style="color:#6b7280">${esc(a.description)}</small>` : ''}</td>
+      <td>${rolePill}</td>
+      <td>${envPill}</td>
+      <td>${esc(expiry)}</td>
+      <td><span class="status-badge ${statusCls}">${statusIcon} ${esc(a.status)}</span></td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
 // ── Utilities ─────────────────────────────────────────────────────────────────
 function esc(str) {
   return String(str ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -903,6 +1060,8 @@ function fmtDate(iso) {
 // ── Init ──────────────────────────────────────────────────────────────────────
 checkTokenStatus();
 updateSortHeaders();
+updateApprovalSortHeaders();
+updateActiveSortHeaders();
 </script>
 </body>
 </html>

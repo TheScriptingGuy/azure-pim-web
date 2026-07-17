@@ -16,6 +16,7 @@ from azure_pim_cli.cli import (
 from azure_pim_cli.graph_client import GraphClient
 
 from .models import (
+    ActiveGroupItem,
     ActivatePayload,
     ActivateResult,
     ApprovalItem,
@@ -130,6 +131,25 @@ async def approve_items(gc: GraphClient, items: list[ApprovePayload]) -> list[Ap
         return ApproveResult(approvalId=payload.approvalId, ok=status == "Approved", detail=detail)
 
     return list(await asyncio.gather(*[_one(p) for p in items]))
+
+
+async def get_active_assignments(gc: GraphClient) -> list[ActiveGroupItem]:
+    raw = await gc.list_pim_group_active_assignments()
+    items = []
+    for r in raw:
+        group = r.get("group") or {}
+        sched = r.get("scheduleInfo") or {}
+        exp = sched.get("expiration") or {}
+        end_dt = exp.get("endDateTime") or None
+        items.append(ActiveGroupItem(
+            groupId=group.get("id") or r.get("groupId") or "",
+            displayName=group.get("displayName") or "?",
+            description=group.get("description") or None,
+            accessId=r.get("accessId") or "member",
+            endDateTime=end_dt,
+            status=r.get("status") or "Provisioned",
+        ))
+    return items
 
 
 async def get_me(gc: GraphClient) -> dict:

@@ -211,7 +211,8 @@
   }
   .filter-input:focus { outline: 2px solid #2563eb; border-color: transparent; }
 
-  /* Approver justification */
+  /* Activation / Approver justification bars */
+  #activator-just-wrap,
   #approver-just-wrap {
     margin-bottom: 14px;
     display: flex;
@@ -219,7 +220,9 @@
     gap: 10px;
     flex-wrap: wrap;
   }
+  #activator-just-wrap label,
   #approver-just-wrap label { font-size: 13px; font-weight: 500; }
+  #activator-just,
   #approver-just {
     flex: 1;
     min-width: 240px;
@@ -305,6 +308,10 @@
       <button id="btn-activate" class="btn-success" disabled onclick="activateSelected()">
         Activate selected (<span id="sel-elig-count">0</span>)
       </button>
+    </div>
+    <div id="activator-just-wrap">
+      <label for="activator-just">Justification:</label>
+      <input id="activator-just" type="text" placeholder="Required for all activations…" />
     </div>
     <table class="pim-table" id="elig-table">
       <thead>
@@ -616,13 +623,6 @@ function renderElig() {
           ${durationOptions(e.policyMaxDurationHours, e.policyMaxDurationHours)}
         </select>
       </div>`;
-    if (e.requiresJustification) {
-      expandHtml += `
-        <div class="field-group" style="flex:1;min-width:200px">
-          <label>Justification <span style="color:#dc2626">*</span></label>
-          <input type="text" id="elig-just-${kid}" placeholder="Required…" />
-        </div>`;
-    }
     if (e.requiresTicket) {
       expandHtml += `
         <div class="field-group">
@@ -667,23 +667,22 @@ function updateActivateBtn() {
 }
 
 async function activateSelected() {
+  const globalJust = document.getElementById('activator-just').value.trim();
+  if (!globalJust) {
+    alert('Justification is required for all activations.');
+    document.getElementById('activator-just').focus();
+    return;
+  }
+
   const items = [];
   for (const kid of eligSel) {
     const e = eligMap.get(kid);
     if (!e) continue;
     const dur = parseInt(document.getElementById(`elig-dur-${kid}`)?.value || e.policyMaxDurationHours, 10);
-    const just = e.requiresJustification
-      ? (document.getElementById(`elig-just-${kid}`)?.value || '').trim()
-      : '';
     const ticket = e.requiresTicket
       ? (document.getElementById(`elig-ticket-${kid}`)?.value || '').trim()
       : null;
 
-    if (e.requiresJustification && !just) {
-      alert(`Justification required for ${e.displayName}`);
-      document.getElementById(`elig-just-${kid}`)?.focus();
-      return;
-    }
     if (e.requiresTicket && !ticket) {
       alert(`Ticket number required for ${e.displayName}`);
       document.getElementById(`elig-ticket-${kid}`)?.focus();
@@ -693,7 +692,7 @@ async function activateSelected() {
       groupId: e.groupId,
       accessId: e.accessId,
       durationHours: dur,
-      justification: just || null,
+      justification: globalJust,
       ticketNumber: ticket || null,
     });
     setEligStatus(kid, 'activating', '⏳ Activating…');

@@ -98,7 +98,7 @@ async def token_grab() -> JSONResponse:
         )
         token = await loop.run_in_executor(
             None,
-            lambda: grab_token(cdp_endpoint=cdp_endpoint, channel=DEFAULT_CHANNEL, require_acrs=False),
+            lambda: grab_token(cdp_endpoint=cdp_endpoint, channel=DEFAULT_CHANNEL, require_acrs=True),
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Token grab failed: {exc}") from exc

@@ -141,14 +141,16 @@ async def get_active_assignments(gc: GraphClient) -> list[ActiveGroupItem]:
         sched = r.get("scheduleInfo") or {}
         exp = sched.get("expiration") or {}
         end_dt = exp.get("endDateTime") or None
-        items.append(ActiveGroupItem(
-            groupId=group.get("id") or r.get("groupId") or "",
-            displayName=group.get("displayName") or "?",
-            description=group.get("description") or None,
-            accessId=r.get("accessId") or "member",
-            endDateTime=end_dt,
-            status=r.get("status") or "Provisioned",
-        ))
+        items.append(
+            ActiveGroupItem(
+                groupId=group.get("id") or r.get("groupId") or "",
+                displayName=group.get("displayName") or "?",
+                description=group.get("description") or None,
+                accessId=r.get("accessId") or "member",
+                endDateTime=end_dt,
+                status=r.get("status") or "Provisioned",
+            )
+        )
     return items
 
 

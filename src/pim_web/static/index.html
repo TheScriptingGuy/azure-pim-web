@@ -3,6 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <title>Azure PIM</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -367,6 +370,9 @@
       <button id="btn-save-profile" class="btn-secondary btn-sm" disabled onclick="saveProfileFromSelected()">
         💾 Save as profile
       </button>
+      <select id="add-to-profile-sel" class="btn-sm" disabled onchange="addSelectedToProfile(this.value); this.value='';" title="Add selected roles to an existing profile">
+        <option value="">＋ Add to profile ▾</option>
+      </select>
       <button id="btn-activate" class="btn-success" disabled onclick="activateSelected()">
         Activate selected (<span id="sel-elig-count">0</span>)
       </button>
@@ -840,6 +846,7 @@ function updateActivateBtn() {
   document.getElementById('sel-elig-count').textContent = n;
   const saveBtn = document.getElementById('btn-save-profile');
   if (saveBtn) saveBtn.disabled = n === 0;
+  updateAddToProfileSelect();
 }
 
 async function activateSelected() {
@@ -1184,34 +1191,17 @@ function renderProfiles() {
         ? '<span class="status-badge available">✓ available</span>'
         : `<span class="status-badge unavailable" title="${esc(it.unavailableReason || '')}">✗ unavailable</span>`;
       const dur = it.durationHours ? `${it.durationHours}h` : (it.policyMaxDurationHours ? `${it.policyMaxDurationHours}h max` : '—');
+      const itemKey = `${it.groupId}_${it.accessId}`;
       itemsHtml += `
         <div class="profile-item ${it.available ? '' : 'unavailable'}">
           <span class="profile-item-name"><strong>${esc(it.displayName)}</strong></span>
           ${rolePill}
           <span style="color:#6b7280;font-size:12px">${dur}</span>
           ${badge}
+          <button class="btn-danger btn-sm" style="margin-left:auto" title="Remove from profile"
+                  onclick="removeRoleFromProfile('${p.id}','${esc(itemKey)}')">✕</button>
         </div>`;
     });
-
-    const existingKeys = new Set(p.items.map(i => `${i.groupId}_${i.accessId}`));
-    const addable = (eligData || []).filter(e => !existingKeys.has(eligKey(e)));
-    const noEligLoaded = !eligData || eligData.length === 0;
-    const addOptions = addable
-      .slice()
-      .sort((a, b) => a.displayName.localeCompare(b.displayName))
-      .map(e => `<option value="${esc(eligKey(e))}">${esc(e.displayName)} — ${e.accessId === 'owner' ? 'Owner' : 'Member'}</option>`)
-      .join('');
-    const addDisabledReason = noEligLoaded
-      ? 'Load eligibilities first (Eligible Roles tab).'
-      : (addable.length === 0 ? 'All eligible roles already in this profile.' : '');
-    const addRowHtml = `
-      <div class="profile-actions" style="border-top:1px dashed #e5e7eb">
-        <label style="font-size:12px;color:#6b7280">Add role:</label>
-        <select id="profile-add-${p.id}" class="profile-just" ${addDisabledReason ? 'disabled' : ''} title="${esc(addDisabledReason)}">
-          ${addDisabledReason ? `<option>${esc(addDisabledReason)}</option>` : '<option value="">— select eligible role —</option>' + addOptions}
-        </select>
-        <button class="btn-secondary btn-sm" ${addDisabledReason ? 'disabled' : ''} onclick="addRoleToProfile('${p.id}')">+ Add</button>
-      </div>`;
 
     card.innerHTML = `
       <div class="profile-header">
@@ -1221,7 +1211,6 @@ function renderProfiles() {
         <button class="btn-danger btn-sm" onclick="deleteProfile('${p.id}')">Delete</button>
       </div>
       <div class="profile-body">${itemsHtml}</div>
-      ${addRowHtml}
       <div class="profile-actions">
         <input class="profile-just" id="profile-just-${p.id}" type="text" placeholder="Justification (required)…" />
         <button class="btn-success btn-sm" ${availableCount === 0 ? 'disabled' : ''} onclick="activateProfile('${p.id}')">
@@ -1269,6 +1258,7 @@ async function saveProfileFromSelected() {
       return;
     }
     profileData = null;   // force reload on next Profiles view
+    updateAddToProfileSelect();
     alert(`Profile "${name}" saved with ${items.length} role(s).`);
   } catch (e) {
     alert('Error: ' + e.message);
@@ -1288,31 +1278,126 @@ async function deleteProfile(pid) {
     }
     profileData = profileData.filter(x => x.id !== pid);
     renderProfiles();
+    updateAddToProfileSelect();
   } catch (e) {
     alert('Error: ' + e.message);
   }
 }
 
-async function addRoleToProfile(pid) {
-  const sel = document.getElementById(`profile-add-${pid}`);
-  const key = sel?.value;
-  if (!key) return;
-  const e = eligMap.get(key);
-  if (!e) { alert('Selected role no longer in eligibilities. Refresh first.'); return; }
-  const profile = profileData.find(x => x.id === pid);
+async function removeRoleFromProfile(pid, key) {
+  const profile = (profileData || []).find(x => x.id === pid);
   if (!profile) return;
-  if (profile.items.some(i => `${i.groupId}_${i.accessId}` === key)) {
-    alert('Role already in profile.');
+  const items = profile.items
+    .filter(i => `${i.groupId}_${i.accessId}` !== key)
+    .map(i => ({
+      groupId: i.groupId,
+      accessId: i.accessId,
+      displayName: i.displayName,
+      description: i.description || null,
+      durationHours: i.durationHours || null,
+      ticketNumber: i.ticketNumber || null,
+    }));
+  if (items.length === profile.items.length) return;
+  try {
+    const r = await fetch(`/api/profiles/${pid}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: profile.name, items }),
+    });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      alert('Remove failed: ' + (d.detail || r.status));
+      return;
+    }
+    profileData = null;
+    loadProfiles();
+    updateAddToProfileSelect();
+  } catch (err) {
+    alert('Error: ' + err.message);
+  }
+}
+
+let addToProfileFetching = false;
+
+async function ensureProfilesLoaded() {
+  if (profileData !== null || addToProfileFetching) return;
+  addToProfileFetching = true;
+  try {
+    const r = await fetch('/api/profiles');
+    if (r.ok) profileData = await r.json();
+  } catch { /* non-fatal */ }
+  finally { addToProfileFetching = false; }
+}
+
+function updateAddToProfileSelect() {
+  const sel = document.getElementById('add-to-profile-sel');
+  if (!sel) return;
+
+  const setState = (opts, disabled, placeholder) => {
+    sel.innerHTML = `<option value="">${placeholder}</option>` + opts;
+    sel.disabled = disabled;
+  };
+
+  if (eligSel.size === 0) {
+    setState('', true, '＋ Add to profile ▾');
     return;
   }
-  const newItem = {
-    groupId: e.groupId,
-    accessId: e.accessId,
-    displayName: e.displayName,
-    description: e.description || null,
-    durationHours: e.policyMaxDurationHours || null,
-    ticketNumber: null,
-  };
+  if (profileData === null) {
+    setState('', true, '＋ Loading profiles…');
+    ensureProfilesLoaded().then(() => updateAddToProfileSelect());
+    return;
+  }
+  if (profileData.length === 0) {
+    setState('', true, '＋ No profiles yet');
+    return;
+  }
+  const selectedKeys = [...eligSel];
+  const candidates = profileData
+    .map(p => {
+      const existing = new Set(p.items.map(i => `${i.groupId}_${i.accessId}`));
+      const addCount = selectedKeys.filter(k => !existing.has(k)).length;
+      return { p, addCount };
+    })
+    .filter(x => x.addCount > 0)
+    .sort((a, b) => a.p.name.localeCompare(b.p.name));
+
+  if (candidates.length === 0) {
+    setState('', true, '＋ All in every profile');
+    return;
+  }
+  const opts = candidates
+    .map(x => `<option value="${esc(x.p.id)}">${esc(x.p.name)} (adds ${x.addCount})</option>`)
+    .join('');
+  setState(opts, false, '＋ Add to profile ▾');
+}
+
+async function addSelectedToProfile(pid) {
+  if (!pid) return;
+  const profile = (profileData || []).find(x => x.id === pid);
+  if (!profile) { alert('Profile no longer exists. Refresh.'); return; }
+  const existing = new Set(profile.items.map(i => `${i.groupId}_${i.accessId}`));
+  const toAdd = [];
+  for (const kid of eligSel) {
+    if (existing.has(kid)) continue;
+    const e = eligMap.get(kid);
+    if (!e) continue;
+    const dur = parseInt(document.getElementById(`elig-dur-${kid}`)?.value || e.policyMaxDurationHours, 10);
+    const ticket = e.requiresTicket
+      ? (document.getElementById(`elig-ticket-${kid}`)?.value || '').trim() || null
+      : null;
+    toAdd.push({
+      groupId: e.groupId,
+      accessId: e.accessId,
+      displayName: e.displayName,
+      description: e.description || null,
+      durationHours: dur,
+      ticketNumber: ticket,
+    });
+  }
+  if (toAdd.length === 0) {
+    alert(`All selected roles already in "${profile.name}".`);
+    return;
+  }
   const items = profile.items.map(i => ({
     groupId: i.groupId,
     accessId: i.accessId,
@@ -1320,7 +1405,7 @@ async function addRoleToProfile(pid) {
     description: i.description || null,
     durationHours: i.durationHours || null,
     ticketNumber: i.ticketNumber || null,
-  })).concat([newItem]);
+  })).concat(toAdd);
   try {
     const r = await fetch(`/api/profiles/${pid}`, {
       method: 'PUT',
@@ -1328,12 +1413,13 @@ async function addRoleToProfile(pid) {
       body: JSON.stringify({ name: profile.name, items }),
     });
     const d = await r.json();
-    if (!r.ok) {
-      alert('Add failed: ' + (d.detail || r.status));
-      return;
-    }
+    if (!r.ok) { alert('Add failed: ' + (d.detail || r.status)); return; }
     profileData = null;
-    loadProfiles();
+    await ensureProfilesLoaded();
+    updateAddToProfileSelect();
+    const activeTab = document.querySelector('.tab-panel.active')?.id;
+    if (activeTab === 'panel-profiles') renderProfiles();
+    alert(`Added ${toAdd.length} role(s) to "${profile.name}".`);
   } catch (err) {
     alert('Error: ' + err.message);
   }

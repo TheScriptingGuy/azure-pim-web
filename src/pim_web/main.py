@@ -84,9 +84,16 @@ async def _resolve_principal(gc: GraphClient) -> str:
     return pid
 
 
+_NO_CACHE_HEADERS = {
+    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+    "Pragma": "no-cache",
+    "Expires": "0",
+}
+
+
 @app.get("/", include_in_schema=False)
 async def index() -> FileResponse:
-    return FileResponse(_STATIC / "index.html")
+    return FileResponse(_STATIC / "index.html", headers=_NO_CACHE_HEADERS)
 
 
 @app.get("/api/token/status", response_model=TokenStatus)

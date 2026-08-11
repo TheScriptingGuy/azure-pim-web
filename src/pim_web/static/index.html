@@ -181,6 +181,63 @@
   .status-badge.failed        { background: #fee2e2; color: #991b1b; }
   .status-badge.approved      { background: #dcfce7; color: #166534; }
   .status-badge.activating    { background: #e0f2fe; color: #075985; }
+  .status-badge.unavailable   { background: #fee2e2; color: #991b1b; }
+  .status-badge.available     { background: #dcfce7; color: #166534; }
+
+  /* Profile cards */
+  .profile-card {
+    background: #fff;
+    border-radius: 8px;
+    box-shadow: 0 1px 3px rgba(0,0,0,.08);
+    margin-bottom: 14px;
+    overflow: hidden;
+  }
+  .profile-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 16px;
+    border-bottom: 1px solid #e5e7eb;
+    background: #f9fafb;
+  }
+  .profile-name { font-size: 15px; font-weight: 600; }
+  .profile-meta { font-size: 12px; color: #6b7280; }
+  .profile-body { padding: 10px 16px; }
+  .profile-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 0;
+    border-bottom: 1px dashed #f3f4f6;
+    font-size: 13px;
+  }
+  .profile-item:last-child { border-bottom: none; }
+  .profile-item.unavailable { opacity: .6; }
+  .profile-item.unavailable .profile-item-name { text-decoration: line-through; }
+  .profile-item-name { flex: 1; }
+  .profile-actions {
+    padding: 10px 16px;
+    background: #f9fafb;
+    border-top: 1px solid #e5e7eb;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .profile-just {
+    flex: 1;
+    min-width: 200px;
+    padding: 5px 10px;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    font-size: 13px;
+  }
+  .profile-store-path {
+    font-size: 12px;
+    color: #6b7280;
+    margin-bottom: 12px;
+    font-family: monospace;
+  }
 
   /* Toolbar */
   .toolbar {
@@ -293,6 +350,7 @@
   <button id="tab-elig" class="active" onclick="switchTab('elig')">Eligible Roles</button>
   <button id="tab-approvals" onclick="switchTab('approvals')">Pending Approvals</button>
   <button id="tab-active" onclick="switchTab('active')">Active Groups</button>
+  <button id="tab-profiles" onclick="switchTab('profiles')">Profiles</button>
 </nav>
 
 <main>
@@ -306,6 +364,9 @@
       <input id="elig-filter" type="search" class="filter-input" placeholder="Filter roles…"
              oninput="eligFilter=this.value;renderElig()" />
       <button class="btn-secondary btn-sm" onclick="loadEligibilities()">↻ Refresh</button>
+      <button id="btn-save-profile" class="btn-secondary btn-sm" disabled onclick="saveProfileFromSelected()">
+        💾 Save as profile
+      </button>
       <button id="btn-activate" class="btn-success" disabled onclick="activateSelected()">
         Activate selected (<span id="sel-elig-count">0</span>)
       </button>
@@ -376,6 +437,22 @@
     </div>
   </div>
 
+  <!-- Profiles panel -->
+  <div id="panel-profiles" class="tab-panel">
+    <div class="toolbar">
+      <h2>Profiles</h2>
+      <span id="profiles-count" class="count-badge">0</span>
+      <div class="spacer"></div>
+      <button class="btn-secondary btn-sm" onclick="loadProfiles(true)">↻ Refresh availability</button>
+    </div>
+    <div class="profile-store-path" id="profile-store-path">
+      Stored locally in ~/.pim-web/profiles.json
+    </div>
+    <div id="profiles-list">
+      <p class="empty-msg">Loading profiles…</p>
+    </div>
+  </div>
+
   <!-- Active Groups panel -->
   <div id="panel-active" class="tab-panel">
     <div class="toolbar">
@@ -418,6 +495,7 @@ let activeSort = { col: 'displayName', dir: 'asc' };
 let eligFilter = '';
 let approvalFilter = '';
 let activeFilter = '';
+let profileData = null;
 
 // Stable, DOM-safe key for an eligibility item
 const eligKey = e => `${e.groupId}_${e.accessId}`;
@@ -618,10 +696,11 @@ async function pasteToken() {
 
 // ── Tabs ──────────────────────────────────────────────────────────────────────
 function switchTab(name) {
-  ['elig', 'approvals', 'active'].forEach(t => {
+  ['elig', 'approvals', 'active', 'profiles'].forEach(t => {
     document.getElementById(`tab-${t}`).classList.toggle('active', t === name);
     document.getElementById(`panel-${t}`).classList.toggle('active', t === name);
   });
+  if (name === 'profiles' && profileData === null) loadProfiles();
 }
 
 // ── Eligible Roles ────────────────────────────────────────────────────────────
@@ -759,6 +838,8 @@ function updateActivateBtn() {
   const n = eligSel.size;
   btn.disabled = n === 0;
   document.getElementById('sel-elig-count').textContent = n;
+  const saveBtn = document.getElementById('btn-save-profile');
+  if (saveBtn) saveBtn.disabled = n === 0;
 }
 
 async function activateSelected() {
@@ -1044,6 +1125,191 @@ function renderActiveGroups() {
     `;
     tbody.appendChild(tr);
   });
+}
+
+// ── Profiles ──────────────────────────────────────────────────────────────────
+async function loadProfiles(forceRefreshElig) {
+  const list = document.getElementById('profiles-list');
+  list.innerHTML = '<p class="empty-msg">Loading profiles…</p>';
+
+  // Availability needs the eligibility cache on the server. Populate if missing
+  // (or when user explicitly asked for a refresh).
+  if (forceRefreshElig || eligData.length === 0) {
+    try {
+      const r = await fetch('/api/eligibilities');
+      if (r.ok) {
+        eligData = await r.json();
+        eligData.forEach(e => { e._env = deriveEnv(e); });
+        eligMap = new Map(eligData.map(e => [eligKey(e), e]));
+        document.getElementById('elig-count').textContent = eligData.length;
+      }
+    } catch { /* non-fatal — availability will show unknown */ }
+  }
+
+  try {
+    const r = await fetch('/api/profiles');
+    if (!r.ok) {
+      list.innerHTML = `<p class="empty-msg">Failed to load profiles (${r.status}).</p>`;
+      return;
+    }
+    profileData = await r.json();
+    renderProfiles();
+  } catch (e) {
+    list.innerHTML = `<p class="empty-msg">Error: ${esc(e.message)}</p>`;
+  }
+}
+
+function renderProfiles() {
+  const list = document.getElementById('profiles-list');
+  document.getElementById('profiles-count').textContent = profileData.length;
+  if (!profileData.length) {
+    list.innerHTML = '<p class="empty-msg">No profiles saved yet. Select roles on the Eligible Roles tab, then click "Save as profile".</p>';
+    return;
+  }
+  list.innerHTML = '';
+  profileData.forEach(p => {
+    const availableCount = p.items.filter(i => i.available).length;
+    const unavailableCount = p.items.length - availableCount;
+
+    const card = document.createElement('div');
+    card.className = 'profile-card';
+    card.id = `profile-card-${p.id}`;
+
+    let itemsHtml = '';
+    p.items.forEach(it => {
+      const rolePill = it.accessId === 'owner'
+        ? '<span class="pill owner">Owner</span>'
+        : '<span class="pill member">Member</span>';
+      const badge = it.available
+        ? '<span class="status-badge available">✓ available</span>'
+        : `<span class="status-badge unavailable" title="${esc(it.unavailableReason || '')}">✗ unavailable</span>`;
+      const dur = it.durationHours ? `${it.durationHours}h` : (it.policyMaxDurationHours ? `${it.policyMaxDurationHours}h max` : '—');
+      itemsHtml += `
+        <div class="profile-item ${it.available ? '' : 'unavailable'}">
+          <span class="profile-item-name"><strong>${esc(it.displayName)}</strong></span>
+          ${rolePill}
+          <span style="color:#6b7280;font-size:12px">${dur}</span>
+          ${badge}
+        </div>`;
+    });
+
+    card.innerHTML = `
+      <div class="profile-header">
+        <span class="profile-name">${esc(p.name)}</span>
+        <span class="profile-meta">${availableCount} available${unavailableCount ? `, <span style="color:#991b1b">${unavailableCount} unavailable</span>` : ''}</span>
+        <div class="spacer"></div>
+        <button class="btn-danger btn-sm" onclick="deleteProfile('${p.id}')">Delete</button>
+      </div>
+      <div class="profile-body">${itemsHtml}</div>
+      <div class="profile-actions">
+        <input class="profile-just" id="profile-just-${p.id}" type="text" placeholder="Justification (required)…" />
+        <button class="btn-success btn-sm" ${availableCount === 0 ? 'disabled' : ''} onclick="activateProfile('${p.id}')">
+          Activate ${availableCount} available
+        </button>
+      </div>
+      <div id="profile-log-${p.id}"></div>
+    `;
+    list.appendChild(card);
+  });
+}
+
+async function saveProfileFromSelected() {
+  if (eligSel.size === 0) return;
+  const name = prompt('Profile name:');
+  if (!name || !name.trim()) return;
+
+  const items = [];
+  for (const kid of eligSel) {
+    const e = eligMap.get(kid);
+    if (!e) continue;
+    const dur = parseInt(document.getElementById(`elig-dur-${kid}`)?.value || e.policyMaxDurationHours, 10);
+    const ticket = e.requiresTicket
+      ? (document.getElementById(`elig-ticket-${kid}`)?.value || '').trim() || null
+      : null;
+    items.push({
+      groupId: e.groupId,
+      accessId: e.accessId,
+      displayName: e.displayName,
+      description: e.description || null,
+      durationHours: dur,
+      ticketNumber: ticket,
+    });
+  }
+
+  try {
+    const r = await fetch('/api/profiles', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name.trim(), items }),
+    });
+    const d = await r.json();
+    if (!r.ok) {
+      alert('Save failed: ' + (d.detail || 'unknown'));
+      return;
+    }
+    profileData = null;   // force reload on next Profiles view
+    alert(`Profile "${name}" saved with ${items.length} role(s).`);
+  } catch (e) {
+    alert('Error: ' + e.message);
+  }
+}
+
+async function deleteProfile(pid) {
+  const p = profileData.find(x => x.id === pid);
+  if (!p) return;
+  if (!confirm(`Delete profile "${p.name}"?`)) return;
+  try {
+    const r = await fetch(`/api/profiles/${pid}`, { method: 'DELETE' });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      alert('Delete failed: ' + (d.detail || r.status));
+      return;
+    }
+    profileData = profileData.filter(x => x.id !== pid);
+    renderProfiles();
+  } catch (e) {
+    alert('Error: ' + e.message);
+  }
+}
+
+async function activateProfile(pid) {
+  const just = document.getElementById(`profile-just-${pid}`).value.trim();
+  if (!just) {
+    alert('Justification is required.');
+    document.getElementById(`profile-just-${pid}`).focus();
+    return;
+  }
+  const logEl = document.getElementById(`profile-log-${pid}`);
+  logEl.innerHTML = '<div id="log" style="margin:0;border-radius:0"><div id="log-header">Activation log</div><div id="log-entries-' + pid + '" style="padding:8px 14px"></div></div>';
+  const entries = document.getElementById(`log-entries-${pid}`);
+
+  try {
+    const r = await fetch(`/api/profiles/${pid}/activate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ justification: just }),
+    });
+    const results = await r.json();
+    if (!r.ok) {
+      alert('Activation error: ' + (results.detail || JSON.stringify(results)));
+      return;
+    }
+    const profile = profileData.find(x => x.id === pid);
+    const nameLookup = new Map((profile?.items || []).map(i => [`${i.groupId}_${i.accessId}`, i.displayName]));
+    results.forEach(res => {
+      const name = nameLookup.get(`${res.groupId}_${res.accessId}`) || res.groupId;
+      let cls = 'pending', icon = '⏳';
+      if (res.status === 'Provisioned' || res.status === 'AlreadyActive') { cls = 'provisioned'; icon = '✓'; }
+      else if (res.status === 'Unavailable') { cls = 'unavailable'; icon = '⊘'; }
+      else if (res.status === 'Failed' || res.status === 'Denied' || res.status === 'Canceled') { cls = 'failed'; icon = '✗'; }
+      const div = document.createElement('div');
+      div.className = 'log-entry';
+      div.innerHTML = `<span class="status-badge ${cls}" style="min-width:80px">${icon} ${res.status}</span> <span class="log-name">${esc(name)}</span> <span style="color:#6b7280">${esc(res.detail || '')}</span>`;
+      entries.appendChild(div);
+    });
+  } catch (e) {
+    entries.innerHTML = `<div class="log-entry"><span class="status-badge failed">✗ error</span> <span>${esc(e.message)}</span></div>`;
+  }
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────

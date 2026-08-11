@@ -18,8 +18,10 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from . import profiles as profiles_store
 from . import service
 from .models import (
+    ActivatePayload,
     ActivateRequest,
     ActivateResult,
     ActiveGroupItem,
@@ -27,6 +29,11 @@ from .models import (
     ApproveRequest,
     ApproveResult,
     EligibilityItem,
+    Profile,
+    ProfileActivateRequest,
+    ProfileItemStatus,
+    ProfileSaveRequest,
+    ProfileStatus,
     TokenSetRequest,
     TokenStatus,
 )
@@ -192,6 +199,101 @@ async def approve(body: ApproveRequest) -> list[ApproveResult]:
         raise HTTPException(status_code=401, detail="Token expired.")
     finally:
         await gc.aclose()
+
+
+@app.get("/api/profiles", response_model=list[ProfileStatus])
+async def list_profiles() -> list[ProfileStatus]:
+    elig_raw = _state.get("elig_raw") or []
+    elig_map = {(e["groupId"], e["accessId"]): e for e in elig_raw}
+    result: list[ProfileStatus] = []
+    for p in profiles_store.list_profiles():
+        items: list[ProfileItemStatus] = []
+        for it in p.items:
+            e = elig_map.get((it.groupId, it.accessId))
+            available = e is not None
+            items.append(
+                ProfileItemStatus(
+                    **it.model_dump(),
+                    available=available,
+                    policyMaxDurationHours=int(e.get("policyMaxDurationHours") or 8) if e else None,
+                    requiresTicket=bool(e.get("requiresTicket", False)) if e else False,
+                    requiresMfa=bool(e.get("requiresMfa", False)) if e else False,
+                    unavailableReason=None if available else "Not in current eligibilities",
+                )
+            )
+        result.append(ProfileStatus(id=p.id, name=p.name, items=items))
+    return result
+
+
+@app.post("/api/profiles", response_model=Profile)
+async def create_profile(req: ProfileSaveRequest) -> Profile:
+    return profiles_store.upsert_profile(None, req)
+
+
+@app.put("/api/profiles/{pid}", response_model=Profile)
+async def update_profile(pid: str, req: ProfileSaveRequest) -> Profile:
+    try:
+        return profiles_store.upsert_profile(pid, req)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Profile not found") from exc
+
+
+@app.delete("/api/profiles/{pid}")
+async def delete_profile(pid: str) -> JSONResponse:
+    if not profiles_store.delete_profile(pid):
+        raise HTTPException(status_code=404, detail="Profile not found")
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/profiles/{pid}/activate", response_model=list[ActivateResult])
+async def activate_profile(pid: str, body: ProfileActivateRequest) -> list[ActivateResult]:
+    p = profiles_store.get_profile(pid)
+    if p is None:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    elig_raw = _state.get("elig_raw") or []
+    if not elig_raw:
+        raise HTTPException(status_code=400, detail="Load eligibilities first before activating.")
+    elig_map = {(e["groupId"], e["accessId"]): e for e in elig_raw}
+
+    payloads: list[ActivatePayload] = []
+    skipped: list[ActivateResult] = []
+    for it in p.items:
+        e = elig_map.get((it.groupId, it.accessId))
+        if e is None:
+            skipped.append(
+                ActivateResult(
+                    groupId=it.groupId,
+                    accessId=it.accessId,
+                    status="Unavailable",
+                    detail="Role no longer eligible — skipped",
+                )
+            )
+            continue
+        max_h = int(e.get("policyMaxDurationHours") or 8)
+        requested = it.durationHours or body.durationHours or max_h
+        payloads.append(
+            ActivatePayload(
+                groupId=it.groupId,
+                accessId=it.accessId,
+                durationHours=min(requested, max_h),
+                justification=body.justification,
+                ticketNumber=it.ticketNumber,
+            )
+        )
+
+    if not payloads:
+        return skipped
+
+    gc = _require_client()
+    try:
+        principal_id = await _resolve_principal(gc)
+        results = await service.activate_items(gc, principal_id, payloads, elig_raw)
+    except TokenExpired as exc:
+        _state["token"] = None
+        raise HTTPException(status_code=401, detail="Token expired.") from exc
+    finally:
+        await gc.aclose()
+    return skipped + results
 
 
 def start() -> None:

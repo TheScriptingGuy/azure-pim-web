@@ -80,3 +80,42 @@ class TokenStatus(BaseModel):
     valid: bool
     expiry: str | None = None
     upn: str | None = None
+
+
+class ProfileItem(BaseModel):
+    groupId: str
+    accessId: str
+    displayName: str
+    description: str | None = None
+    durationHours: int | None = None
+    ticketNumber: str | None = None
+
+
+class Profile(BaseModel):
+    id: str
+    name: str
+    items: list[ProfileItem]
+
+
+class ProfileItemStatus(ProfileItem):
+    available: bool
+    policyMaxDurationHours: int | None = None
+    requiresTicket: bool = False
+    requiresMfa: bool = False
+    unavailableReason: str | None = None
+
+
+class ProfileStatus(BaseModel):
+    id: str
+    name: str
+    items: list[ProfileItemStatus]
+
+
+class ProfileSaveRequest(BaseModel):
+    name: str
+    items: list[ProfileItem]
+
+
+class ProfileActivateRequest(BaseModel):
+    justification: str
+    durationHours: int | None = None

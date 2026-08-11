@@ -1193,6 +1193,26 @@ function renderProfiles() {
         </div>`;
     });
 
+    const existingKeys = new Set(p.items.map(i => `${i.groupId}_${i.accessId}`));
+    const addable = (eligData || []).filter(e => !existingKeys.has(eligKey(e)));
+    const noEligLoaded = !eligData || eligData.length === 0;
+    const addOptions = addable
+      .slice()
+      .sort((a, b) => a.displayName.localeCompare(b.displayName))
+      .map(e => `<option value="${esc(eligKey(e))}">${esc(e.displayName)} — ${e.accessId === 'owner' ? 'Owner' : 'Member'}</option>`)
+      .join('');
+    const addDisabledReason = noEligLoaded
+      ? 'Load eligibilities first (Eligible Roles tab).'
+      : (addable.length === 0 ? 'All eligible roles already in this profile.' : '');
+    const addRowHtml = `
+      <div class="profile-actions" style="border-top:1px dashed #e5e7eb">
+        <label style="font-size:12px;color:#6b7280">Add role:</label>
+        <select id="profile-add-${p.id}" class="profile-just" ${addDisabledReason ? 'disabled' : ''} title="${esc(addDisabledReason)}">
+          ${addDisabledReason ? `<option>${esc(addDisabledReason)}</option>` : '<option value="">— select eligible role —</option>' + addOptions}
+        </select>
+        <button class="btn-secondary btn-sm" ${addDisabledReason ? 'disabled' : ''} onclick="addRoleToProfile('${p.id}')">+ Add</button>
+      </div>`;
+
     card.innerHTML = `
       <div class="profile-header">
         <span class="profile-name">${esc(p.name)}</span>
@@ -1201,6 +1221,7 @@ function renderProfiles() {
         <button class="btn-danger btn-sm" onclick="deleteProfile('${p.id}')">Delete</button>
       </div>
       <div class="profile-body">${itemsHtml}</div>
+      ${addRowHtml}
       <div class="profile-actions">
         <input class="profile-just" id="profile-just-${p.id}" type="text" placeholder="Justification (required)…" />
         <button class="btn-success btn-sm" ${availableCount === 0 ? 'disabled' : ''} onclick="activateProfile('${p.id}')">
@@ -1269,6 +1290,52 @@ async function deleteProfile(pid) {
     renderProfiles();
   } catch (e) {
     alert('Error: ' + e.message);
+  }
+}
+
+async function addRoleToProfile(pid) {
+  const sel = document.getElementById(`profile-add-${pid}`);
+  const key = sel?.value;
+  if (!key) return;
+  const e = eligMap.get(key);
+  if (!e) { alert('Selected role no longer in eligibilities. Refresh first.'); return; }
+  const profile = profileData.find(x => x.id === pid);
+  if (!profile) return;
+  if (profile.items.some(i => `${i.groupId}_${i.accessId}` === key)) {
+    alert('Role already in profile.');
+    return;
+  }
+  const newItem = {
+    groupId: e.groupId,
+    accessId: e.accessId,
+    displayName: e.displayName,
+    description: e.description || null,
+    durationHours: e.policyMaxDurationHours || null,
+    ticketNumber: null,
+  };
+  const items = profile.items.map(i => ({
+    groupId: i.groupId,
+    accessId: i.accessId,
+    displayName: i.displayName,
+    description: i.description || null,
+    durationHours: i.durationHours || null,
+    ticketNumber: i.ticketNumber || null,
+  })).concat([newItem]);
+  try {
+    const r = await fetch(`/api/profiles/${pid}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: profile.name, items }),
+    });
+    const d = await r.json();
+    if (!r.ok) {
+      alert('Add failed: ' + (d.detail || r.status));
+      return;
+    }
+    profileData = null;
+    loadProfiles();
+  } catch (err) {
+    alert('Error: ' + err.message);
   }
 }
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+
 from pim_web import profiles as profiles_mod
 from pim_web.models import ProfileItem, ProfileSaveRequest
 

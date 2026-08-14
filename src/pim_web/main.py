@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import uvicorn
+from azure_pim_cli.acrs_primer import prime_acrs
 from azure_pim_cli.chrome_launcher import DEFAULT_COPY_PROFILE, DEFAULT_PORT, launch_debug_chrome
 from azure_pim_cli.graph_client import GraphClient, TokenExpired
 from azure_pim_cli.token_grabber import DEFAULT_CHANNEL, grab_token
@@ -50,6 +51,7 @@ _state: dict[str, Any] = {
     "upn": None,
     "principal_id": None,
     "elig_raw": [],  # enriched eligibility dicts cached after last /api/eligibilities call
+    "cdp_endpoint": None,  # set by /api/token/grab; used to auto-prime acrs=c1 on activation
 }
 
 
@@ -118,6 +120,7 @@ async def token_grab() -> JSONResponse:
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Token grab failed: {exc}") from exc
 
+    _state["cdp_endpoint"] = cdp_endpoint
     _apply_token(token)
     exp = _state.get("token_exp")
     expiry_str = datetime.fromtimestamp(exp, tz=UTC).strftime("%Y-%m-%d %H:%M UTC") if exp else None
@@ -130,6 +133,56 @@ async def token_set(body: TokenSetRequest) -> JSONResponse:
     exp = _state.get("token_exp")
     expiry_str = datetime.fromtimestamp(exp, tz=UTC).strftime("%Y-%m-%d %H:%M UTC") if exp else None
     return JSONResponse({"ok": True, "expiry": expiry_str, "upn": _state.get("upn")})
+
+
+async def _activate_with_acrs_retry(
+    gc: GraphClient,
+    principal_id: str,
+    payloads: list[ActivatePayload],
+    elig_raw: list[dict],
+) -> list[ActivateResult]:
+    """Run activation; on RoleAssignmentRequestAcrsValidationFailed, prime acrs=c1 via portal and retry failed items.
+
+    Mirrors the CLI's auto-prime path so users don't have to manually re-grab a token when
+    Graph rejects a storage-cached token with stale step-up MFA (`c1` present in claims but
+    auth-time too old to satisfy the Conditional Access policy).
+    """
+    results = await service.activate_items(gc, principal_id, payloads, elig_raw)
+
+    def _needs_acrs(r: ActivateResult) -> bool:
+        return r.status == "Failed" and "AcrsValidationFailed" in (r.detail or "")
+
+    failed_keys = {(r.groupId, r.accessId) for r in results if _needs_acrs(r)}
+    if not failed_keys:
+        return results
+
+    cdp_endpoint = _state.get("cdp_endpoint")
+    if not cdp_endpoint:
+        return results  # no CDP handle — user must re-grab manually
+
+    loop = asyncio.get_event_loop()
+    try:
+        new_token = await loop.run_in_executor(
+            None,
+            lambda: prime_acrs(cdp_endpoint, justification="acrs prime", timeout=180),
+        )
+    except Exception as exc:
+        # Keep original failures; surface prime error in detail so UI can show it.
+        for r in results:
+            if _needs_acrs(r):
+                r.detail = f"{r.detail} | auto-prime failed: {exc}"
+        return results
+
+    _apply_token(new_token)
+    retry_payloads = [p for p in payloads if (p.groupId, p.accessId) in failed_keys]
+    gc2 = GraphClient(new_token)
+    try:
+        retry_results = await service.activate_items(gc2, principal_id, retry_payloads, elig_raw)
+    finally:
+        await gc2.aclose()
+
+    keep = [r for r in results if (r.groupId, r.accessId) not in failed_keys]
+    return keep + retry_results
 
 
 def _apply_token(token: str) -> None:
@@ -188,7 +241,7 @@ async def activate(body: ActivateRequest) -> list[ActivateResult]:
     gc = _require_client()
     try:
         principal_id = await _resolve_principal(gc)
-        return await service.activate_items(gc, principal_id, body.items, elig_raw)
+        return await _activate_with_acrs_retry(gc, principal_id, body.items, elig_raw)
     except TokenExpired:
         _state["token"] = None
         raise HTTPException(status_code=401, detail="Token expired.")
@@ -294,7 +347,7 @@ async def activate_profile(pid: str, body: ProfileActivateRequest) -> list[Activ
     gc = _require_client()
     try:
         principal_id = await _resolve_principal(gc)
-        results = await service.activate_items(gc, principal_id, payloads, elig_raw)
+        results = await _activate_with_acrs_retry(gc, principal_id, payloads, elig_raw)
     except TokenExpired as exc:
         _state["token"] = None
         raise HTTPException(status_code=401, detail="Token expired.") from exc

@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any
 
 import uvicorn
-from azure_pim_cli.acrs_primer import prime_acrs
 from azure_pim_cli.chrome_launcher import DEFAULT_COPY_PROFILE, DEFAULT_PORT, launch_debug_chrome
 from azure_pim_cli.graph_client import GraphClient, TokenExpired
 from azure_pim_cli.token_grabber import DEFAULT_CHANNEL, grab_token
@@ -86,6 +85,25 @@ async def _resolve_principal(gc: GraphClient) -> str:
     return pid
 
 
+async def _ensure_cdp_endpoint() -> str:
+    """Return cached CDP endpoint or launch/attach Chrome on the debug port and cache it.
+
+    Idempotent: `launch_debug_chrome` attaches to a Chrome already listening on the port
+    instead of spawning a duplicate. Lets acrs re-grab work even when the server
+    restarted or the user loaded a token via `/api/token/set` (never hit `/api/token/grab`).
+    """
+    cdp = _state.get("cdp_endpoint")
+    if cdp:
+        return cdp
+    loop = asyncio.get_event_loop()
+    cdp = await loop.run_in_executor(
+        None,
+        lambda: launch_debug_chrome(port=DEFAULT_PORT, copy_profile=DEFAULT_COPY_PROFILE),
+    )
+    _state["cdp_endpoint"] = cdp
+    return cdp
+
+
 _NO_CACHE_HEADERS = {
     "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
     "Pragma": "no-cache",
@@ -109,10 +127,7 @@ async def token_status() -> TokenStatus:
 async def token_grab() -> JSONResponse:
     loop = asyncio.get_event_loop()
     try:
-        cdp_endpoint = await loop.run_in_executor(
-            None,
-            lambda: launch_debug_chrome(port=DEFAULT_PORT, copy_profile=DEFAULT_COPY_PROFILE),
-        )
+        cdp_endpoint = await _ensure_cdp_endpoint()
         token = await loop.run_in_executor(
             None,
             lambda: grab_token(cdp_endpoint=cdp_endpoint, channel=DEFAULT_CHANNEL, require_acrs=True),
@@ -120,7 +135,6 @@ async def token_grab() -> JSONResponse:
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Token grab failed: {exc}") from exc
 
-    _state["cdp_endpoint"] = cdp_endpoint
     _apply_token(token)
     exp = _state.get("token_exp")
     expiry_str = datetime.fromtimestamp(exp, tz=UTC).strftime("%Y-%m-%d %H:%M UTC") if exp else None
@@ -141,11 +155,15 @@ async def _activate_with_acrs_retry(
     payloads: list[ActivatePayload],
     elig_raw: list[dict],
 ) -> list[ActivateResult]:
-    """Run activation; on RoleAssignmentRequestAcrsValidationFailed, prime acrs=c1 via portal and retry failed items.
+    """Run activation; on AcrsValidationFailed, open PIM blade in a fresh tab, sniff c1 token, retry.
 
-    Mirrors the CLI's auto-prime path so users don't have to manually re-grab a token when
-    Graph rejects a storage-cached token with stale step-up MFA (`c1` present in claims but
-    auth-time too old to satisfy the Conditional Access policy).
+    Graph rejects tokens whose `acrs` claim lacks `c1` (or whose step-up MFA auth-time is
+    too stale for the tenant's Conditional Access policy). `grab_token(require_acrs=True)`
+    reuses the existing Chrome (via CDP) to open the PIM activation blade — portal's own
+    XHRs then mint a fresh c1 token which we sniff off the Authorization header. If Chrome
+    isn't attached yet (server restarted, or user set token via /api/token/set),
+    `_ensure_cdp_endpoint` launches/attaches it lazily so no prior `/api/token/grab` call
+    is required.
     """
     results = await service.activate_items(gc, principal_id, payloads, elig_raw)
 
@@ -156,21 +174,21 @@ async def _activate_with_acrs_retry(
     if not failed_keys:
         return results
 
-    cdp_endpoint = _state.get("cdp_endpoint")
-    if not cdp_endpoint:
-        return results  # no CDP handle — user must re-grab manually
-
     loop = asyncio.get_event_loop()
     try:
+        cdp_endpoint = await _ensure_cdp_endpoint()
         new_token = await loop.run_in_executor(
             None,
-            lambda: prime_acrs(cdp_endpoint, justification="acrs prime", timeout=180),
+            lambda: grab_token(
+                cdp_endpoint=cdp_endpoint,
+                channel=DEFAULT_CHANNEL,
+                require_acrs=True,
+            ),
         )
     except Exception as exc:
-        # Keep original failures; surface prime error in detail so UI can show it.
         for r in results:
             if _needs_acrs(r):
-                r.detail = f"{r.detail} | auto-prime failed: {exc}"
+                r.detail = f"{r.detail} | acrs re-grab failed: {exc}"
         return results
 
     _apply_token(new_token)

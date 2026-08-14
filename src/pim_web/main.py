@@ -92,11 +92,11 @@ async def _ensure_cdp_endpoint() -> str:
     instead of spawning a duplicate. Lets acrs re-grab work even when the server
     restarted or the user loaded a token via `/api/token/set` (never hit `/api/token/grab`).
     """
-    cdp = _state.get("cdp_endpoint")
-    if cdp:
-        return cdp
+    cached = _state.get("cdp_endpoint")
+    if cached:
+        return str(cached)
     loop = asyncio.get_event_loop()
-    cdp = await loop.run_in_executor(
+    cdp: str = await loop.run_in_executor(
         None,
         lambda: launch_debug_chrome(port=DEFAULT_PORT, copy_profile=DEFAULT_COPY_PROFILE),
     )

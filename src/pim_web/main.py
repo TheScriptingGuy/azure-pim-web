@@ -167,12 +167,20 @@ async def _activate_with_acrs_retry(
     """
     results = await service.activate_items(gc, principal_id, payloads, elig_raw)
 
-    def _needs_acrs(r: ActivateResult) -> bool:
-        return r.status == "Failed" and "AcrsValidationFailed" in (r.detail or "")
+    def _needs_regrab(r: ActivateResult) -> bool:
+        if r.status != "Failed":
+            return False
+        detail = r.detail or ""
+        return "AcrsValidationFailed" in detail or "PermissionScopeNotGranted" in detail
 
-    failed_keys = {(r.groupId, r.accessId) for r in results if _needs_acrs(r)}
+    def _needs_readwrite(r: ActivateResult) -> bool:
+        return r.status == "Failed" and "PermissionScopeNotGranted" in (r.detail or "")
+
+    failed_keys = {(r.groupId, r.accessId) for r in results if _needs_regrab(r)}
     if not failed_keys:
         return results
+
+    require_readwrite = any(_needs_readwrite(r) for r in results)
 
     loop = asyncio.get_event_loop()
     try:
@@ -183,12 +191,13 @@ async def _activate_with_acrs_retry(
                 cdp_endpoint=cdp_endpoint,
                 channel=DEFAULT_CHANNEL,
                 require_acrs=True,
+                require_readwrite=require_readwrite,
             ),
         )
     except Exception as exc:
         for r in results:
-            if _needs_acrs(r):
-                r.detail = f"{r.detail} | acrs re-grab failed: {exc}"
+            if _needs_regrab(r):
+                r.detail = f"{r.detail} | re-grab failed: {exc}"
         return results
 
     _apply_token(new_token)

@@ -5,6 +5,9 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import os
+import signal
+import sys
 import webbrowser
 from datetime import UTC, datetime
 from pathlib import Path
@@ -384,8 +387,23 @@ async def activate_profile(pid: str, body: ProfileActivateRequest) -> list[Activ
 
 
 def start() -> None:
+    # Playwright automation runs in a thread-pool executor and blocks in native
+    # code, so uvicorn's graceful SIGINT shutdown hangs waiting for it. Hard-exit
+    # instead — this is a local single-user dev tool, no graceful-drain needed.
+    def _hard_exit(*_: object) -> None:
+        print("\n[pim-web] Ctrl+C — exiting.", file=sys.stderr)
+        os._exit(130)
+
+    config = uvicorn.Config("pim_web.main:app", host="127.0.0.1", port=8080, reload=False)
+    server = uvicorn.Server(config)
+    server.install_signal_handlers = lambda: None  # keep our handlers, not uvicorn's
+    signal.signal(signal.SIGINT, _hard_exit)
+    try:
+        signal.signal(signal.SIGTERM, _hard_exit)
+    except (AttributeError, ValueError):
+        pass
     webbrowser.open("http://127.0.0.1:8080")
-    uvicorn.run("pim_web.main:app", host="127.0.0.1", port=8080, reload=False)
+    server.run()
 
 
 if __name__ == "__main__":

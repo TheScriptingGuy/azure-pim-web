@@ -636,11 +636,18 @@ function applyTokenStatus(d) {
     setBadge('valid', '● Valid');
     document.getElementById('token-expiry').textContent = d.expiry ? `expires ${d.expiry}` : '';
     document.getElementById('token-upn').textContent = d.upn || '';
+    loadAllData();
   } else {
     setBadge('invalid', '● No token');
     document.getElementById('token-expiry').textContent = '';
     document.getElementById('token-upn').textContent = '';
   }
+}
+
+function loadAllData() {
+  loadEligibilities();
+  loadApprovals();
+  loadActiveGroups();
 }
 
 function setBadge(cls, text) {

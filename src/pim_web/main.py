@@ -126,11 +126,81 @@ async def token_status() -> TokenStatus:
     return TokenStatus(valid=_token_valid(), expiry=expiry_str, upn=_state.get("upn"))
 
 
+_MSAL_PURGE_JS = r"""
+() => {
+    let removed = 0;
+    for (const store of [window.sessionStorage, window.localStorage]) {
+        const keys = [];
+        for (let i = 0; i < store.length; i++) keys.push(store.key(i));
+        for (const k of keys) {
+            if (!k) continue;
+            const v = store.getItem(k);
+            if (!v) continue;
+            try {
+                const obj = JSON.parse(v);
+                if (obj && obj.credentialType === "AccessToken") {
+                    store.removeItem(k);
+                    removed++;
+                }
+            } catch (e) { /* not JSON */ }
+        }
+    }
+    return removed;
+}
+"""
+
+
+def _purge_portal_msal_cache(cdp_endpoint: str) -> int:
+    """Wipe MSAL cached access tokens from every portal tab so the next grab mints fresh.
+
+    Cookies (SSO) stay intact — only credentialType==AccessToken entries in
+    session/localStorage are removed. Forces MSAL to re-acquire on next portal XHR.
+    """
+    from urllib.parse import urlparse
+
+    from playwright.sync_api import sync_playwright
+
+    removed_total = 0
+    with sync_playwright() as pw:
+        try:
+            browser = pw.chromium.connect_over_cdp(cdp_endpoint, timeout=15000)
+        except Exception:
+            return 0
+        try:
+            for ctx in browser.contexts:
+                for pg in ctx.pages:
+                    try:
+                        host = urlparse(pg.url or "").hostname
+                    except Exception:
+                        host = None
+                    if host != "portal.azure.com":
+                        continue
+                    for frame in pg.frames:
+                        try:
+                            n = frame.evaluate(_MSAL_PURGE_JS)
+                            removed_total += int(n or 0)
+                        except Exception:
+                            continue
+        finally:
+            try:
+                browser.close()
+            except Exception:
+                pass
+    return removed_total
+
+
 @app.post("/api/token/grab")
 async def token_grab() -> JSONResponse:
     loop = asyncio.get_event_loop()
     try:
         cdp_endpoint = await _ensure_cdp_endpoint()
+        # Force refresh: nuke MSAL cached access tokens on any open portal tab
+        # so grab_token can't shortcut via storage-scrape and must sniff a
+        # freshly-minted XHR token from the portal.
+        removed = await loop.run_in_executor(None, lambda: _purge_portal_msal_cache(cdp_endpoint))
+        print(f"[pim-web] purged {removed} MSAL AccessToken entries before grab", file=sys.stderr)
+        _state["token"] = None
+        _state["token_exp"] = None
         token = await loop.run_in_executor(
             None,
             lambda: grab_token(cdp_endpoint=cdp_endpoint, channel=DEFAULT_CHANNEL, require_acrs=True),
